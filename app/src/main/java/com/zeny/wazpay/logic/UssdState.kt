@@ -9,6 +9,7 @@ sealed class UssdScreen {
     object PinInput : UssdScreen()
     data class Success(val refId: String?, val exitOption: String? = null) : UssdScreen()
     data class Error(val message: String, val exitOption: String? = null) : UssdScreen()
+    data class BalanceResponse(val balance: String, val exitOption: String? = null) : UssdScreen()
     object ExitDialog : UssdScreen()
     object Feedback : UssdScreen()
     object WelcomeDialog : UssdScreen()

@@ -20,7 +20,13 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun PinScreen(value: String, onValueChange: (String) -> Unit, onPay: () -> Unit, onBack: () -> Unit) {
+fun PinScreen(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onPay: () -> Unit,
+    onBack: () -> Unit,
+    actionLabel: String = "Pay Securely"
+) {
     var pinVisible by remember { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
     
@@ -40,7 +46,13 @@ fun PinScreen(value: String, onValueChange: (String) -> Unit, onPay: () -> Unit,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text("Secure UPI PIN", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "Enter your 4 or 6 digit UPI PIN",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            )
+            Spacer(modifier = Modifier.height(20.dp))
             
             Row(
                 modifier = Modifier
@@ -106,7 +118,7 @@ fun PinScreen(value: String, onValueChange: (String) -> Unit, onPay: () -> Unit,
                     .height(64.dp),
                 shape = RoundedCornerShape(20.dp)
             ) {
-                Text("Pay Securely", style = MaterialTheme.typography.titleLarge)
+                Text(actionLabel, style = MaterialTheme.typography.titleLarge)
             }
         }
     }

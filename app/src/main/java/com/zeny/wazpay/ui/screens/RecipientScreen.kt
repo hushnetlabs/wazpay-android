@@ -6,6 +6,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.*
@@ -25,7 +27,9 @@ fun RecipientScreen(
     onValueChange: (String) -> Unit,
     onNext: () -> Unit,
     onScanClick: () -> Unit,
-    recentRecipients: List<String> = emptyList()
+    recentRecipients: List<String> = emptyList(),
+    onProfileClick: () -> Unit = {},
+    onCheckBalanceClick: () -> Unit = {}
 ) {
     Box(
         modifier = Modifier
@@ -42,14 +46,27 @@ fun RecipientScreen(
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(
-                "WAZPAY",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Black,
-                letterSpacing = 4.sp,
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-                textAlign = TextAlign.Center
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "WAZPAY",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 4.sp,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                )
+                IconButton(onClick = onProfileClick) {
+                    Icon(
+                        Icons.Default.AccountCircle,
+                        contentDescription = "Account",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            }
             
             Spacer(modifier = Modifier.height(60.dp))
             
@@ -162,6 +179,24 @@ fun RecipientScreen(
                 shape = RoundedCornerShape(20.dp)
             ) {
                 Text("Continue", style = MaterialTheme.typography.titleLarge)
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedButton(
+                onClick = onCheckBalanceClick,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                shape = RoundedCornerShape(20.dp)
+            ) {
+                Icon(
+                    Icons.Default.AccountBalanceWallet,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Check Balance", style = MaterialTheme.typography.titleMedium)
             }
         }
     }

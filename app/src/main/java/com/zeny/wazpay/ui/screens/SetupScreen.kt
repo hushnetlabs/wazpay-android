@@ -11,14 +11,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
 @Composable
 fun SetupScreen(onComplete: (String, Int) -> Unit) {
+    val context = LocalContext.current
     var ifsc by remember { mutableStateOf("") }
     var selectedSim by remember { mutableIntStateOf(0) }
+    val simInfoList = remember { getSimInfo(context) }
     
     Box(
         modifier = Modifier
@@ -87,23 +90,47 @@ fun SetupScreen(onComplete: (String, Int) -> Unit) {
             )
             Spacer(modifier = Modifier.height(12.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                listOf("SIM 1", "SIM 2").forEachIndexed { index, label ->
+                listOf(0, 1).forEach { index ->
                     val isSelected = selectedSim == index
+                    val simLabel = "SIM ${index + 1}"
+                    val simData = simInfoList.getOrNull(index)
+                    val carrierRaw = simData?.first ?: ""
+                    val carrier = carrierRaw.substringAfter("· ").trim().ifBlank { null }
+                    val number = simData?.second
+
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .height(80.dp)
                             .clip(RoundedCornerShape(16.dp))
                             .background(if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
                             .clickable { selectedSim = index }
                             .padding(16.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            label,
-                            style = MaterialTheme.typography.titleLarge,
-                            color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                simLabel,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                            )
+                            if (carrier != null) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    carrier,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f) else MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            if (number != null) {
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    number,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                 }
             }
