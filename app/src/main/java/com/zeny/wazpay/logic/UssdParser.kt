@@ -18,6 +18,7 @@ object UssdParser {
             isAmountPrompt(fullText) -> UssdScreen.AmountInput
             isRemarkPrompt(fullText) -> UssdScreen.RemarkInput
             isConfirmationPrompt(fullText) -> UssdScreen.Confirmation
+            isBalanceResponse(fullText) -> UssdScreen.BalanceResponse(extractBalance(fullText), findExitOption(fullText))
             isSuccessMessage(fullTextLower) -> UssdScreen.Success(extractRefId(fullText), findExitOption(fullText))
             isFeedbackPrompt(fullTextLower) -> UssdScreen.Feedback
             isErrorMessage(fullTextLower) -> UssdScreen.Error(fullText, findExitOption(fullText))
@@ -37,7 +38,10 @@ object UssdParser {
 
     private fun isSendMoneyMenu(text: String): Boolean =
         (text.contains("Send Money", true) || text.contains("Transfer", true)) &&
-                Regex("\\d\\.?\\s*(Mobile|UPI|VPA)", RegexOption.IGNORE_CASE).containsMatchIn(text)
+                Regex(
+                    "\\d\\.?\\s*(Mobile|UPI|VPA|Balance|Request|Receive|Profile|Pending|Enquiry|Inquiry|Transaction)",
+                    RegexOption.IGNORE_CASE
+                ).containsMatchIn(text)
 
     private fun isRecipientPrompt(text: String): Boolean =
         (text.contains("Enter", true) || text.contains("Mobile", true) || text.contains("UPI", true) || text.contains("Beneficiary", true)) &&
@@ -121,6 +125,25 @@ object UssdParser {
 
     private fun isErrorMessage(text: String): Boolean = 
         text.contains("failed") || text.contains("invalid") || text.contains("error") || text.contains("unable")
+
+    private fun isBalanceResponse(text: String): Boolean {
+        val lower = text.lowercase()
+        val hasBalanceWord = lower.contains("balance") || lower.contains("available")
+        val hasCurrencyOrAmount = lower.contains("rs") || lower.contains("₹") ||
+                lower.contains("inr") || Regex("[0-9]+\\.[0-9]{2}").containsMatchIn(text)
+        return hasBalanceWord && hasCurrencyOrAmount && !isSendMoneyMenu(text) && !isAmountPrompt(text)
+    }
+
+    fun extractBalance(text: String): String {
+        val patterns = listOf(
+            Regex("(?:Rs\\.?|₹|INR)\\s*([0-9,]+(?:\\.[0-9]{1,2})?)"),
+            Regex("([0-9,]+(?:\\.[0-9]{1,2})?)\\s*(?:Rs\\.?|₹|INR)")
+        )
+        for (pattern in patterns) {
+            pattern.find(text)?.groupValues?.get(1)?.let { return "₹${it.replace(",", "")}" }
+        }
+        return text.lines().firstOrNull { it.contains("balance", true) }?.trim() ?: text.take(100)
+    }
 
     private fun extractRefId(text: String): String? {
         val refRegex = Regex("(?:RefId|Ref|Txn|Reference|ID|Id is)[:\\s]*([A-Z\\d]{8,})", RegexOption.IGNORE_CASE)
