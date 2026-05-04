@@ -2,49 +2,104 @@ package com.zeny.wazpay
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
+import android.graphics.PixelFormat
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.savedstate.SavedStateRegistry
+import androidx.savedstate.SavedStateRegistryController
+import androidx.savedstate.SavedStateRegistryOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.zeny.wazpay.logic.PreferenceManager
 import com.zeny.wazpay.logic.UssdParser
 import com.zeny.wazpay.logic.UssdScreen
+import com.zeny.wazpay.ui.screens.UssdOverlayContent
+import com.zeny.wazpay.ui.theme.WazpayTheme
 
 class UssdService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
     private val submitAction = Runnable { clickSendOrOk() }
     private lateinit var prefs: PreferenceManager
+    private lateinit var windowManager: WindowManager
     private var lastHandledSignature: String? = null
     private var lastHandledAtMs: Long = 0L
+
+    // Overlay state
+    private var overlayView: ComposeView? = null
+    private var overlayOwner: OverlayLifecycleOwner? = null
 
     override fun onCreate() {
         super.onCreate()
         prefs = PreferenceManager(this)
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+    }
+
+    override fun onDestroy() {
+        removeUssdOverlay()
+        super.onDestroy()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
-        val packageName = event.packageName?.toString() ?: return
-        if (!prefs.transactionInProgress) {
+        val eventPackage = event.packageName?.toString() ?: return
+        val active = prefs.transactionInProgress || prefs.balanceCheckInProgress
+
+        if (active) {
+            Log.v(TAG, "RawEvent pkg=$eventPackage type=${event.eventType}")
+        }
+
+        if (!active) {
+            removeUssdOverlay()
             resetProcessingGuards()
             return
         }
 
-        val rootNode = rootInActiveWindow ?: return
+        val rootNode = bestUssdRoot(eventPackage) ?: run {
+            Log.w(TAG, "No usable root for event from $eventPackage")
+            return
+        }
+        val effectivePkg = rootNode.packageName?.toString() ?: eventPackage
+
+        if (effectivePkg == packageName || effectivePkg == "com.android.systemui") {
+            Log.v(TAG, "Skipping own/systemui window ($effectivePkg)")
+            return
+        }
+
+        // Show overlay the first time we see a non-own, non-systemui window
+        if (overlayView == null) showUssdOverlay()
+
         try {
             val allTexts = mutableListOf<String>()
             findAllTextNodes(rootNode, allTexts)
-            if (allTexts.isEmpty()) return
-            if (!shouldHandleWindow(packageName)) return
+            if (allTexts.isEmpty()) {
+                Log.v(TAG, "No text nodes – effectivePkg=$effectivePkg event=$eventPackage")
+                return
+            }
 
-            Log.d(TAG, "USSD Text [${packageName}]: ${allTexts.joinToString(" | ")}")
+            val combinedText = allTexts.joinToString(" | ")
+
+            if (combinedText.length > 400 && (combinedText.contains("Expand") || combinedText.contains("Collapse"))) {
+                Log.w(TAG, "Skipping notification-pane content (${combinedText.length} chars) from $effectivePkg")
+                return
+            }
+
+            Log.d(TAG, "USSD Text [$effectivePkg] (event=$eventPackage): $combinedText")
+            Log.d(TAG, "Balance mode=${prefs.balanceCheckInProgress} PayMode=${prefs.transactionInProgress}")
 
             val screen = UssdParser.parse(allTexts)
             if (shouldSkipDuplicate(screen, allTexts)) return
-            Log.d(TAG, "Detected Screen: ${screen::class.simpleName}")
+            Log.d(TAG, "Detected Screen: ${screen::class.simpleName} | text=$combinedText")
 
             when (screen) {
                 is UssdScreen.WelcomeDialog -> {
@@ -61,10 +116,18 @@ class UssdService : AccessibilityService() {
                     }
                 }
                 is UssdScreen.SendMoneyMenu -> {
-                    val recipient = prefs.pendingRecipient
-                    val isMobile = recipient?.all { it.isDigit() } == true && recipient.length >= 10
-                    UssdParser.findMenuOption(allTexts.joinToString("\n"), isMobile)?.let { option ->
+                    if (prefs.balanceCheckInProgress) {
+                        val menuText = allTexts.joinToString("\n")
+                        val option = UssdParser.findOptionForKeywords(
+                            menuText, listOf("Balance", "Check Balance", "Account Balance", "Enquiry")
+                        ) ?: "4"
                         findInputNode(rootNode)?.let { autoFillAndSend(it, option) }
+                    } else {
+                        val recipient = prefs.pendingRecipient
+                        val isMobile = recipient?.all { it.isDigit() } == true && recipient.length >= 10
+                        UssdParser.findMenuOption(allTexts.joinToString("\n"), isMobile)?.let { option ->
+                            findInputNode(rootNode)?.let { autoFillAndSend(it, option) }
+                        }
                     }
                 }
                 is UssdScreen.RecipientInput -> {
@@ -88,12 +151,11 @@ class UssdService : AccessibilityService() {
                     prefs.pendingRecipient = null
                     prefs.pendingAmount = null
                     prefs.pendingPin = null
-                    
-                    // If the success screen has an "Exit" option, use it immediately
                     screen.exitOption?.let { option ->
                         Log.d(TAG, "Success screen contains exit option: $option. Sending it.")
                         findInputNode(rootNode)?.let { autoFillAndSend(it, option) }
                     }
+                    bringAppToForeground(delay = 1200)
                 }
                 is UssdScreen.ExitDialog -> {
                     val exitOption = UssdParser.findExitOption(allTexts.joinToString("\n")) ?: "2"
@@ -102,14 +164,28 @@ class UssdService : AccessibilityService() {
                 is UssdScreen.Feedback -> {
                     handleFeedback(rootNode)
                 }
+                is UssdScreen.BalanceResponse -> {
+                    prefs.lastBalance = screen.balance
+                    prefs.balanceCheckInProgress = false
+                    prefs.pendingPin = null
+                    resetProcessingGuards()
+                    screen.exitOption?.let { option ->
+                        findInputNode(rootNode)?.let { autoFillAndSend(it, option) }
+                    } ?: clickSendOrOk()
+                    bringAppToForeground(delay = 800)
+                }
                 is UssdScreen.Error -> {
                     prefs.transactionInProgress = false
+                    prefs.balanceCheckInProgress = false
                     prefs.lastError = screen.message
                     resetProcessingGuards()
                     clickSendOrOk()
+                    bringAppToForeground(delay = 600)
                 }
                 UssdScreen.Unknown -> {
-                    // Possible system dialog or intermediate step
+                    if (prefs.balanceCheckInProgress) {
+                        Log.w(TAG, "Balance check: unrecognised USSD screen. Full text:\n${allTexts.joinToString("\n")}")
+                    }
                 }
             }
 
@@ -129,6 +205,118 @@ class UssdService : AccessibilityService() {
         bringAppToForeground(delay = 600)
     }
 
+    // ── Overlay ──────────────────────────────────────────────────────────────
+
+    private inner class OverlayLifecycleOwner : LifecycleOwner, SavedStateRegistryOwner {
+        private val registry = LifecycleRegistry(this)
+        private val controller = SavedStateRegistryController.create(this)
+        override val lifecycle: Lifecycle = registry
+        override val savedStateRegistry: SavedStateRegistry = controller.savedStateRegistry
+
+        fun start() {
+            controller.performRestore(null)
+            registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+            registry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+            registry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+        }
+
+        fun stop() {
+            registry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+            registry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+            registry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+        }
+    }
+
+    private fun showUssdOverlay() {
+        if (overlayView != null) return
+        val isBalanceCheck = prefs.balanceCheckInProgress
+        val owner = OverlayLifecycleOwner()
+        owner.start()
+        val view = ComposeView(this).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+            setViewTreeLifecycleOwner(owner)
+            setViewTreeSavedStateRegistryOwner(owner)
+            setContent {
+                WazpayTheme {
+                    UssdOverlayContent(isBalanceCheck)
+                }
+            }
+        }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.OPAQUE
+        )
+        overlayOwner = owner
+        overlayView = view
+        try {
+            windowManager.addView(view, params)
+            Log.d(TAG, "USSD overlay shown (balance=$isBalanceCheck)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to show overlay", e)
+            owner.stop()
+            overlayView = null
+            overlayOwner = null
+        }
+    }
+
+    private fun removeUssdOverlay() {
+        val view = overlayView ?: return
+        try { windowManager.removeView(view) } catch (_: Exception) {}
+        overlayOwner?.stop()
+        overlayView = null
+        overlayOwner = null
+        Log.d(TAG, "USSD overlay removed")
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private fun bestUssdRoot(eventPackage: String): AccessibilityNodeInfo? {
+        val ownPkg = packageName
+        try {
+            val allWindows = windows
+            if (!allWindows.isNullOrEmpty()) {
+                allWindows.forEachIndexed { i, win ->
+                    Log.v(TAG, "  win[$i] pkg=${win.root?.packageName} type=${win.type}")
+                }
+                val telecomWindow = allWindows.firstOrNull { win ->
+                    val pkg = win.root?.packageName?.toString() ?: ""
+                    pkg.isNotEmpty() && pkg != ownPkg && pkg != "com.android.systemui" && isKnownTelecomPkg(pkg)
+                }
+                if (telecomWindow != null) {
+                    Log.v(TAG, "bestUssdRoot: telecom window pkg=${telecomWindow.root?.packageName}")
+                    return telecomWindow.root
+                }
+                val otherWindow = allWindows.firstOrNull { win ->
+                    val pkg = win.root?.packageName?.toString() ?: ""
+                    pkg.isNotEmpty() && pkg != ownPkg && pkg != "com.android.systemui"
+                }
+                if (otherWindow != null) {
+                    Log.v(TAG, "bestUssdRoot: other window pkg=${otherWindow.root?.packageName}")
+                    return otherWindow.root
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "bestUssdRoot: error iterating windows", e)
+        }
+        val root = rootInActiveWindow
+        val rootPkg = root?.packageName?.toString() ?: ""
+        if (rootPkg == ownPkg || rootPkg == "com.android.systemui") {
+            Log.w(TAG, "bestUssdRoot: active window is own/systemui ($rootPkg) — skipping")
+            return null
+        }
+        Log.v(TAG, "bestUssdRoot: fallback rootInActiveWindow pkg=$rootPkg")
+        return root
+    }
+
+    private fun isKnownTelecomPkg(pkg: String): Boolean {
+        if (pkg in telecomPackages) return true
+        val normalized = pkg.lowercase()
+        return telecomPackageHints.any { normalized.contains(it) }
+    }
+
     private fun findAllTextNodes(node: AccessibilityNodeInfo, texts: MutableList<String>) {
         node.text?.let { texts.add(it.toString()) }
         node.contentDescription?.let { texts.add(it.toString()) }
@@ -137,32 +325,20 @@ class UssdService : AccessibilityService() {
 
     private fun autoFillAndSend(node: AccessibilityNodeInfo, text: String) {
         Log.i(TAG, "Auto-filling text: '$text'")
-        
-        // Ensure the node is focused before setting text
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-        
-        val args = Bundle().apply { 
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) 
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
         val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
         Log.i(TAG, "Set text result: $success")
-        
         if (!success) {
-            // Fallback for some older devices or custom implementations
-            val clipboard = Bundle().apply { 
-                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) 
+            val clipboard = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
             }
             node.performAction(AccessibilityNodeInfo.ACTION_PASTE, clipboard)
         }
-
         handler.removeCallbacks(submitAction)
         handler.postDelayed(submitAction, 800)
-    }
-
-    private fun shouldHandleWindow(packageName: String): Boolean {
-        if (packageName in telecomPackages) return true
-        val normalizedPackage = packageName.lowercase()
-        return telecomPackageHints.any { normalizedPackage.contains(it) }
     }
 
     private fun shouldSkipDuplicate(screen: UssdScreen, texts: List<String>): Boolean {
@@ -184,8 +360,7 @@ class UssdService : AccessibilityService() {
     }
 
     private fun findInputNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        // Some devices use EditText, some just marked as editable, some have SET_TEXT action
-        if (node.isEditable || 
+        if (node.isEditable ||
             node.className?.contains("EditText", true) == true ||
             (node.actions and AccessibilityNodeInfo.ACTION_SET_TEXT != 0)) {
             return AccessibilityNodeInfo.obtain(node)
@@ -198,8 +373,6 @@ class UssdService : AccessibilityService() {
 
     private fun clickSendOrOk() {
         val root = rootInActiveWindow ?: return
-        
-        // Strategy 1: Find by common "Positive" keywords
         val positiveKeywords = listOf("send", "ok", "submit", "accept", "reply", "answer", "done", "confirm", "call", "dial", "proceed")
         val positiveButton = findClickableWithKeywords(root, positiveKeywords)
         if (positiveButton != null) {
@@ -207,35 +380,25 @@ class UssdService : AccessibilityService() {
             positiveButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             return
         }
-
-        // Strategy 2: Search for ANY node with "clickable" set to true that isn't the input field
-        // Some manufacturers don't use the "Button" class properly
         val allClickables = mutableListOf<AccessibilityNodeInfo>()
         findAllClickableNodes(root, allClickables)
-        
         if (allClickables.isNotEmpty()) {
-            // Filter out clearly "Negative" buttons
             val filtered = allClickables.filter { node ->
                 val text = (node.text ?: node.contentDescription ?: "").toString().lowercase()
                 !text.contains("cancel") && !text.contains("exit") && !text.contains("close") && !text.contains("dismiss")
             }
-            
             if (filtered.isNotEmpty()) {
-                // In USSD dialogs, the "Action" button is almost always the last one in the hierarchy (the right-most)
-                val target = filtered.last() 
+                val target = filtered.last()
                 Log.d(TAG, "Clicking best-guess clickable node: ${target.text ?: target.className ?: "unlabeled"}")
                 target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 return
             }
         }
-
-        // Strategy 3: Fallback - if there is only one clickable node, click it
         if (allClickables.size == 1) {
             Log.d(TAG, "Clicking the only available clickable node")
             allClickables[0].performAction(AccessibilityNodeInfo.ACTION_CLICK)
             return
         }
-        
         Log.e(TAG, "Could not find a button to click!")
     }
 
@@ -251,7 +414,6 @@ class UssdService : AccessibilityService() {
     private fun findClickableWithKeywords(node: AccessibilityNodeInfo, keywords: List<String>): AccessibilityNodeInfo? {
         val text = node.text?.toString()?.lowercase() ?: ""
         val contentDesc = node.contentDescription?.toString()?.lowercase() ?: ""
-        
         if (keywords.any { text.contains(it) || contentDesc.contains(it) }) {
             var current: AccessibilityNodeInfo? = node
             while (current != null) {
@@ -259,18 +421,17 @@ class UssdService : AccessibilityService() {
                 current = current.parent
             }
         }
-        
         for (i in 0 until node.childCount) {
             node.getChild(i)?.let { findClickableWithKeywords(it, keywords)?.let { found -> return found } }
         }
         return null
     }
 
-
     private fun bringAppToForeground(delay: Long) {
         handler.postDelayed({
-            val intent = Intent(this, MainActivity::class.java).apply { 
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT) 
+            removeUssdOverlay()
+            val intent = Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             }
             startActivity(intent)
         }, delay)
