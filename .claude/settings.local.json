@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"C:\\\\NewVolume\\\\wazpay-android\" -Recurse -Depth 2)",
+      "Bash(Select-Object FullName, PSIsContainer)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(xargs wc *)",
+      "Bash(./gradlew assembleDebug --no-daemon)",
+      "Bash(./gradlew assembleDebug --no-daemon --info)",
+      "Bash(./gradlew assembleDebug)"
+    ]
+  }
+}

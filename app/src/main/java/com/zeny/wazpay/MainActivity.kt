@@ -1,10 +1,12 @@
 package com.zeny.wazpay
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.telecom.TelecomManager
@@ -34,8 +36,13 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.zeny.wazpay.logic.PreferenceManager
 import com.zeny.wazpay.ui.screens.*
 import com.zeny.wazpay.ui.theme.WazpayTheme
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 
 private const val TAG = "WazPay-Main"
+var isTestMode = false
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -123,6 +130,18 @@ fun MainContent(prefs: PreferenceManager) {
                 if (prefs.lastPaymentSuccess) {
                     screenState = "SUCCESS"
                 }
+                if (screenState == "BALANCE_CHECKING") {
+                    when {
+                        prefs.lastBalance != null -> screenState = "BALANCE_RESULT"
+                        !prefs.balanceCheckInProgress -> {
+                            // Don't clear yet if there's an error — let the screen show it
+                            if (prefs.lastError == null) {
+                                prefs.clearBalanceState()
+                                screenState = "RECIPIENT"
+                            }
+                        }
+                    }
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -136,12 +155,22 @@ fun MainContent(prefs: PreferenceManager) {
             "PIN" -> screenState = "AMOUNT"
             "SUCCESS" -> screenState = "RECIPIENT"
             "PROCESSING" -> screenState = "RECIPIENT"
+            "PROFILE" -> screenState = "RECIPIENT"
+            "BALANCE_CHECK" -> screenState = "RECIPIENT"
+            "BALANCE_CHECKING" -> {
+                prefs.clearBalanceState()
+                screenState = "RECIPIENT"
+            }
+            "BALANCE_RESULT" -> {
+                prefs.clearBalanceState()
+                screenState = "RECIPIENT"
+            }
         }
     }
 
     val currentView = when {
         screenState == "SPLASH" -> "SPLASH"
-        !hasPermissions && screenState != "SETUP" -> "PERMISSION"
+        !hasPermissions -> "PERMISSION"
         !isAccessEnabled && screenState != "SETUP" -> "ACCESSIBILITY"
         else -> screenState
     }
@@ -176,10 +205,10 @@ fun MainContent(prefs: PreferenceManager) {
                     )
                     "ACCESSIBILITY" -> OnboardingScreen(
                         title = "Enable Accessibility",
-                        description = "WazPay uses Accessibility Service to automate USSD menus. Please enable 'WazPay USSD Service' in Settings.",
+                        description = "WazPay needs its Accessibility Service to automate USSD menus. Tap below to open the toggle — it's one switch.",
                         icon = Icons.Default.Accessibility,
-                        actionLabel = "Go to Settings",
-                        onAction = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+                        actionLabel = "Enable Now",
+                        onAction = { openAccessibilityServiceSettings(context, UssdService::class.java) }
                     )
                     "SETUP" -> SetupScreen(onComplete = { ifsc, sim ->
                         prefs.bankIfsc = ifsc
@@ -187,15 +216,21 @@ fun MainContent(prefs: PreferenceManager) {
                         screenState = "RECIPIENT"
                     })
                     "RECIPIENT" -> RecipientScreen(
-                        value = recipient, 
-                        onValueChange = { recipient = it }, 
-                        onNext = { 
+                        value = recipient,
+                        onValueChange = { recipient = it },
+                        onNext = {
                             prefs.addRecentRecipient(recipient)
                             recentRecipients = prefs.getRecentRecipients().toList()
-                            screenState = "AMOUNT" 
+                            screenState = "AMOUNT"
                         },
                         onScanClick = { screenState = "SCANNER" },
-                        recentRecipients = recentRecipients
+                        recentRecipients = recentRecipients,
+                        onProfileClick = { screenState = "PROFILE" },
+                        onCheckBalanceClick = { screenState = "BALANCE_CHECK" },
+                        onToggleTestMode = {
+                            isTestMode = !isTestMode
+                            android.widget.Toast.makeText(context, if (isTestMode) "Test Mode Enabled" else "Test Mode Disabled", android.widget.Toast.LENGTH_SHORT).show()
+                        }
                     )
                     "SCANNER" -> QrScannerScreen(
                         onScanned = { upiId ->
@@ -229,9 +264,73 @@ fun MainContent(prefs: PreferenceManager) {
                         val name = prefs.lastRecipientName ?: recipient
                         val refId = prefs.lastRefId ?: "N/A"
                         val successAmount = prefs.pendingAmount ?: amount
+                        LaunchedEffect(Unit) {
+                            prefs.addTransactionRecord(
+                                recipient = prefs.pendingRecipient ?: recipient,
+                                amount = successAmount,
+                                refId = refId
+                            )
+                        }
                         SuccessScreen(name, refId, successAmount) {
                             prefs.clearTransactionState()
                             recipient = ""; amount = ""; upiPin = ""; screenState = "RECIPIENT"
+                        }
+                    }
+                    "PROFILE" -> ProfileScreen(
+                        prefs = prefs,
+                        onBack = { screenState = "RECIPIENT" },
+                        onEditSettings = { screenState = "SETUP" }
+                    )
+                    "BALANCE_CHECK" -> PinScreen(
+                        value = upiPin,
+                        onValueChange = { upiPin = it },
+                        actionLabel = "Check Balance",
+                        onBack = { screenState = "RECIPIENT" },
+                        onPay = {
+                            prefs.lastError = null
+                            prefs.pendingPin = upiPin
+                            prefs.balanceCheckInProgress = true
+                            upiPin = ""
+                            screenState = "BALANCE_CHECKING"
+                            initiateBalanceCheck(context, prefs.selectedSim)
+                        }
+                    )
+                    "BALANCE_CHECKING" -> {
+                        var balanceError by remember { mutableStateOf<String?>(null) }
+                        LaunchedEffect(Unit) {
+                            val deadline = System.currentTimeMillis() + 90_000L
+                            while (System.currentTimeMillis() < deadline) {
+                                kotlinx.coroutines.delay(300)
+                                if (prefs.lastBalance != null) { screenState = "BALANCE_RESULT"; break }
+                                if (!prefs.balanceCheckInProgress) {
+                                    val err = prefs.lastError
+                                    if (err != null) {
+                                        balanceError = err
+                                    } else {
+                                        prefs.clearBalanceState()
+                                        screenState = "RECIPIENT"
+                                    }
+                                    break
+                                }
+                            }
+                            if (screenState == "BALANCE_CHECKING" && balanceError == null) {
+                                prefs.clearBalanceState()
+                                screenState = "RECIPIENT"
+                            }
+                        }
+                        BalanceCheckingScreen(
+                            error = balanceError,
+                            onCancel = {
+                                prefs.clearBalanceState()
+                                screenState = "RECIPIENT"
+                            }
+                        )
+                    }
+                    "BALANCE_RESULT" -> {
+                        val balance = prefs.lastBalance ?: "Unavailable"
+                        BalanceResultScreen(balance = balance) {
+                            prefs.clearBalanceState()
+                            screenState = "RECIPIENT"
                         }
                     }
                 }
@@ -240,30 +339,61 @@ fun MainContent(prefs: PreferenceManager) {
     }
 }
 
-private fun initiatePayment(context: Context, recipient: String, amount: String, simIndex: Int) {
-    val ussdCode = "*99*1#"
-    Log.d(TAG, "Dialing USSD: $ussdCode on SIM $simIndex")
-    val encodedUssd = ussdCode.replace("#", Uri.encode("#"))
-    val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$encodedUssd")).apply {
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        putExtra("com.android.phone.force.slot", simIndex)
-        putExtra("com.android.phone.extra.slot", simIndex)
-        putExtra("slot", simIndex)
-        putExtra("simSlot", simIndex)
+private fun openAccessibilityServiceSettings(context: Context, serviceClass: Class<*>) {
+    if (Build.VERSION.SDK_INT >= 33) {
+        try {
+            val intent = Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS")
+            intent.putExtra("android.intent.extra.COMPONENT_NAME",
+                ComponentName(context, serviceClass).flattenToString())
+            context.startActivity(intent)
+            return
+        } catch (_: Exception) {}
     }
+    context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+}
+
+private fun dialUssd(context: Context, ussdCode: String, simIndex: Int, tagMsg: String) {
+    if (isTestMode) {
+        val prefs = PreferenceManager(context)
+        android.widget.Toast.makeText(context, "TEST MODE: Faking USSD $tagMsg", android.widget.Toast.LENGTH_SHORT).show()
+        GlobalScope.launch(Dispatchers.Main) {
+            delay(3000)
+            if (tagMsg.contains("balance check")) {
+                prefs.lastBalance = "₹12,345.67"
+                prefs.balanceCheckInProgress = false
+            } else {
+                prefs.lastPaymentSuccess = true
+                prefs.lastRefId = "TEST" + System.currentTimeMillis().toString().takeLast(8)
+                prefs.transactionInProgress = false
+            }
+        }
+        return
+    }
+    Log.d(TAG, "Dialing $tagMsg: $ussdCode on SIM $simIndex")
+    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
+        Log.w(TAG, "CALL_PHONE permission missing")
+        return
+    }
+    val uri = Uri.parse("tel:${Uri.encode(ussdCode)}")
+    val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+    val extras = Bundle()
     try {
-        val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
         val phoneAccounts = telecomManager.callCapablePhoneAccounts
         if (phoneAccounts != null && simIndex < phoneAccounts.size) {
-            intent.putExtra(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccounts[simIndex])
+            extras.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccounts[simIndex])
         }
     } catch (e: Exception) {
         Log.e(TAG, "Error setting phone account handle", e)
     }
-    
-    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
-        context.startActivity(intent)
-    } else {
-        Log.w(TAG, "CALL_PHONE permission missing during initiatePayment")
-    }
+    telecomManager.placeCall(uri, extras)
+}
+
+private fun initiateBalanceCheck(context: Context, simIndex: Int) {
+    dialUssd(context, "*99*3#", simIndex, "balance check")
+}
+
+private fun initiatePayment(context: Context, recipient: String, amount: String, simIndex: Int) {
+    val isPhone = recipient.all { it.isDigit() } && recipient.length >= 10
+    val ussdCode = if (isPhone) "*99*1*1*$recipient*$amount*1#" else "*99*1#"
+    dialUssd(context, ussdCode, simIndex, "USSD Payment (isPhone=$isPhone)")
 }

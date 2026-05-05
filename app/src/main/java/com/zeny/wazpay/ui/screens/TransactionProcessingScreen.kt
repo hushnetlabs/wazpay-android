@@ -7,26 +7,31 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 
 @Composable
 fun TransactionProcessingScreen(error: String? = null, onCancel: () -> Unit) {
-    val infiniteTransition = rememberInfiniteTransition(label = "ProcessingTransition")
-    val rotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
+    val infiniteTransition = rememberInfiniteTransition(label = "PulseTransition")
+    
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 0.95f,
+        targetValue = 1.05f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
+            animation = tween(1500, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
         ),
-        label = "Rotation"
+        label = "PulseScale"
     )
 
     Column(
@@ -34,30 +39,23 @@ fun TransactionProcessingScreen(error: String? = null, onCancel: () -> Unit) {
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .systemBarsPadding()
-            .padding(24.dp),
+            .padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
         if (error != null) {
-            Box(
-                modifier = Modifier
-                    .size(100.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.errorContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Default.ErrorOutline, 
-                    null, 
-                    tint = MaterialTheme.colorScheme.error, 
-                    modifier = Modifier.size(64.dp)
-                )
-            }
-            Spacer(modifier = Modifier.height(40.dp))
+            Icon(
+                Icons.Default.ErrorOutline, 
+                contentDescription = null, 
+                tint = MaterialTheme.colorScheme.error, 
+                modifier = Modifier.size(64.dp)
+            )
+            Spacer(modifier = Modifier.height(32.dp))
             Text(
                 "Transaction Failed", 
                 style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.error
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onBackground
             )
             Spacer(modifier = Modifier.height(16.dp))
             Text(
@@ -69,31 +67,44 @@ fun TransactionProcessingScreen(error: String? = null, onCancel: () -> Unit) {
             Spacer(modifier = Modifier.height(64.dp))
             Button(
                 onClick = onCancel,
-                modifier = Modifier.fillMaxWidth().height(64.dp),
-                shape = RoundedCornerShape(20.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.onBackground,
+                    contentColor = MaterialTheme.colorScheme.background
+                )
             ) {
-                Text("Try Again", style = MaterialTheme.typography.titleLarge)
+                Text("Try Again", style = MaterialTheme.typography.titleMedium)
             }
         } else {
             Box(
                 modifier = Modifier
-                    .size(120.dp)
-                    .graphicsLayer { rotationZ = rotation }
+                    .size(80.dp)
+                    .scale(pulseScale)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                    .background(MaterialTheme.colorScheme.onBackground),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(80.dp),
-                    color = MaterialTheme.colorScheme.primary,
-                    strokeWidth = 6.dp,
-                    strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                Icon(
+                    imageVector = Icons.Default.Payments,
+                    contentDescription = "Processing",
+                    tint = MaterialTheme.colorScheme.background,
+                    modifier = Modifier.size(32.dp)
                 )
             }
+            
             Spacer(modifier = Modifier.height(48.dp))
-            Text("Processing Transaction", style = MaterialTheme.typography.headlineMedium)
-            Text("Automating USSD requests...", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            
+            Text(
+                "Processing", 
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            BouncingDotsText(text = "Automating USSD")
             
             Spacer(modifier = Modifier.height(80.dp))
             
@@ -102,10 +113,35 @@ fun TransactionProcessingScreen(error: String? = null, onCancel: () -> Unit) {
                 modifier = Modifier
                     .width(200.dp)
                     .height(56.dp),
-                shape = RoundedCornerShape(28.dp)
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.onBackground
+                )
             ) {
-                Text("Cancel", style = MaterialTheme.typography.titleLarge)
+                Text("Cancel", style = MaterialTheme.typography.titleMedium)
             }
         }
     }
+}
+
+@Composable
+fun BouncingDotsText(text: String) {
+    var dotCount by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(400)
+            dotCount = (dotCount + 1) % 4
+        }
+    }
+
+    val dots = ".".repeat(dotCount)
+    
+    Text(
+        text = "$text$dots", 
+        style = MaterialTheme.typography.bodyLarge, 
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.width(200.dp)
+    )
 }
