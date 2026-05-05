@@ -120,7 +120,7 @@ class UssdService : AccessibilityService() {
                         val menuText = allTexts.joinToString("\n")
                         val option = UssdParser.findOptionForKeywords(
                             menuText, listOf("Balance", "Check Balance", "Account Balance", "Enquiry")
-                        ) ?: "4"
+                        ) ?: "3"
                         findInputNode(rootNode)?.let { autoFillAndSend(it, option) }
                     } else {
                         val recipient = prefs.pendingRecipient
@@ -151,11 +151,9 @@ class UssdService : AccessibilityService() {
                     prefs.pendingRecipient = null
                     prefs.pendingAmount = null
                     prefs.pendingPin = null
-                    screen.exitOption?.let { option ->
-                        Log.d(TAG, "Success screen contains exit option: $option. Sending it.")
-                        findInputNode(rootNode)?.let { autoFillAndSend(it, option) }
-                    }
-                    bringAppToForeground(delay = 1200)
+                    resetProcessingGuards()
+                    clickCancelOrDismiss(rootNode)
+                    bringAppToForeground(delay = 800)
                 }
                 is UssdScreen.ExitDialog -> {
                     val exitOption = UssdParser.findExitOption(allTexts.joinToString("\n")) ?: "2"
@@ -169,9 +167,7 @@ class UssdService : AccessibilityService() {
                     prefs.balanceCheckInProgress = false
                     prefs.pendingPin = null
                     resetProcessingGuards()
-                    screen.exitOption?.let { option ->
-                        findInputNode(rootNode)?.let { autoFillAndSend(it, option) }
-                    } ?: clickSendOrOk()
+                    clickCancelOrDismiss(rootNode)
                     bringAppToForeground(delay = 800)
                 }
                 is UssdScreen.Error -> {
@@ -193,16 +189,21 @@ class UssdService : AccessibilityService() {
     }
 
     private fun handleFeedback(rootNode: AccessibilityNodeInfo) {
-        Log.i(TAG, "Dismissing final dialog")
-        val cancelButton = findClickableWithKeywords(rootNode, listOf("cancel", "exit", "close", "dismiss"))
+        clickCancelOrDismiss(rootNode)
+        prefs.transactionInProgress = false
+        resetProcessingGuards()
+        bringAppToForeground(delay = 600)
+    }
+
+    private fun clickCancelOrDismiss(rootNode: AccessibilityNodeInfo?) {
+        val root = rootNode ?: rootInActiveWindow ?: return
+        Log.i(TAG, "Dismissing dialog with cancel/exit")
+        val cancelButton = findClickableWithKeywords(root, listOf("cancel", "exit", "close", "dismiss", "ok"))
         if (cancelButton != null) {
             cancelButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         } else {
             clickSendOrOk()
         }
-        prefs.transactionInProgress = false
-        resetProcessingGuards()
-        bringAppToForeground(delay = 600)
     }
 
     // ── Overlay ──────────────────────────────────────────────────────────────
@@ -238,7 +239,15 @@ class UssdService : AccessibilityService() {
             setViewTreeSavedStateRegistryOwner(owner)
             setContent {
                 WazpayTheme {
-                    UssdOverlayContent(isBalanceCheck)
+                    UssdOverlayContent(
+                        isBalanceCheck = isBalanceCheck,
+                        onClose = {
+                            prefs.transactionInProgress = false
+                            prefs.balanceCheckInProgress = false
+                            resetProcessingGuards()
+                            removeUssdOverlay()
+                        }
+                    )
                 }
             }
         }

@@ -344,7 +344,7 @@ private fun openAccessibilityServiceSettings(context: Context, serviceClass: Cla
 }
 
 private fun initiateBalanceCheck(context: Context, simIndex: Int) {
-    val ussdCode = "*99#"
+    val ussdCode = "*99*3#"
     Log.d(TAG, "Dialing balance check USSD: $ussdCode on SIM $simIndex")
     if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
         Log.w(TAG, "CALL_PHONE permission missing during initiateBalanceCheck")
@@ -365,8 +365,13 @@ private fun initiateBalanceCheck(context: Context, simIndex: Int) {
 }
 
 private fun initiatePayment(context: Context, recipient: String, amount: String, simIndex: Int) {
-    val ussdCode = "*99*1#"
-    Log.d(TAG, "Dialing USSD: $ussdCode on SIM $simIndex")
+    val isPhone = recipient.all { it.isDigit() } && recipient.length >= 10
+    val ussdCode = if (isPhone) {
+        "*99*1*1*$recipient*$amount*1#"
+    } else {
+        "*99*1#"
+    }
+    Log.d(TAG, "Dialing USSD: $ussdCode on SIM $simIndex (isPhone=$isPhone)")
     if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
         Log.w(TAG, "CALL_PHONE permission missing during initiatePayment")
         return

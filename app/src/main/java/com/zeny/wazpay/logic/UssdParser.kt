@@ -14,6 +14,7 @@ object UssdParser {
             isIfscPrompt(fullText) -> UssdScreen.IfscInput
             isWelcomeDialog(fullTextLower) -> UssdScreen.WelcomeDialog
             isSendMoneyMenu(fullText) -> UssdScreen.SendMoneyMenu
+            isErrorMessage(fullTextLower) -> UssdScreen.Error(fullText, findExitOption(fullText))
             isRecipientPrompt(fullText) -> UssdScreen.RecipientInput
             isAmountPrompt(fullText) -> UssdScreen.AmountInput
             isRemarkPrompt(fullText) -> UssdScreen.RemarkInput
@@ -21,14 +22,13 @@ object UssdParser {
             isBalanceResponse(fullText) -> UssdScreen.BalanceResponse(extractBalance(fullText), findExitOption(fullText))
             isSuccessMessage(fullTextLower) -> UssdScreen.Success(extractRefId(fullText), findExitOption(fullText))
             isFeedbackPrompt(fullTextLower) -> UssdScreen.Feedback
-            isErrorMessage(fullTextLower) -> UssdScreen.Error(fullText, findExitOption(fullText))
             isExitDialog(fullTextLower) -> UssdScreen.ExitDialog
             else -> UssdScreen.Unknown
         }
     }
 
     private fun isPinPrompt(text: String): Boolean =
-        text.contains("Enter UPI Pin", true) || text.contains("Enter Pin", true) || text.contains("MPIN", true)
+        (text.contains("PIN", true) || text.contains("MPIN", true)) && text.contains("Enter", true)
 
     private fun isIfscPrompt(text: String): Boolean =
         text.contains("IFSC", true) && (text.contains("Enter", true) || text.contains("First 4", true))
@@ -48,7 +48,6 @@ object UssdParser {
                 !text.contains("PIN", true) && !text.contains("Amount", true) &&
                 !text.contains("Remark", true) && 
                 !text.contains("Success", true) &&
-                !isExitDialog(text) &&
                 !isSendMoneyMenu(text)
 
     private fun isAmountPrompt(text: String): Boolean = text.contains("Enter Amount", true)
