@@ -118,9 +118,7 @@ class UssdService : AccessibilityService() {
                 is UssdScreen.SendMoneyMenu -> {
                     if (prefs.balanceCheckInProgress) {
                         val menuText = allTexts.joinToString("\n")
-                        val option = UssdParser.findOptionForKeywords(
-                            menuText, listOf("Balance", "Check Balance", "Account Balance", "Enquiry")
-                        ) ?: "3"
+                        val option = UssdParser.findBalanceOption(menuText) ?: "3"
                         findInputNode(rootNode)?.let { autoFillAndSend(it, option) }
                     } else {
                         val recipient = prefs.pendingRecipient
@@ -347,11 +345,13 @@ class UssdService : AccessibilityService() {
             node.performAction(AccessibilityNodeInfo.ACTION_PASTE, clipboard)
         }
         handler.removeCallbacks(submitAction)
-        handler.postDelayed(submitAction, 800)
+        handler.postDelayed(submitAction, 300)
     }
 
     private fun shouldSkipDuplicate(screen: UssdScreen, texts: List<String>): Boolean {
-        val signature = "${screen::class.java.name}|${texts.joinToString("\n")}"
+        var hash = screen::class.java.name.hashCode()
+        texts.forEach { hash = 31 * hash + it.hashCode() }
+        val signature = hash.toString()
         val now = SystemClock.uptimeMillis()
         if (signature == lastHandledSignature && now - lastHandledAtMs < DUPLICATE_WINDOW_COOLDOWN_MS) {
             Log.d(TAG, "Skipping duplicate USSD window for ${screen::class.simpleName}")
@@ -372,7 +372,7 @@ class UssdService : AccessibilityService() {
         if (node.isEditable ||
             node.className?.contains("EditText", true) == true ||
             (node.actions and AccessibilityNodeInfo.ACTION_SET_TEXT != 0)) {
-            return AccessibilityNodeInfo.obtain(node)
+            return node
         }
         for (i in 0 until node.childCount) {
             node.getChild(i)?.let { findInputNode(it)?.let { found -> return found } }
@@ -413,7 +413,7 @@ class UssdService : AccessibilityService() {
 
     private fun findAllClickableNodes(node: AccessibilityNodeInfo, list: MutableList<AccessibilityNodeInfo>) {
         if (node.isClickable && !node.isEditable) {
-            list.add(AccessibilityNodeInfo.obtain(node))
+            list.add(node)
         }
         for (i in 0 until node.childCount) {
             node.getChild(i)?.let { findAllClickableNodes(it, list) }
@@ -426,7 +426,7 @@ class UssdService : AccessibilityService() {
         if (keywords.any { text.contains(it) || contentDesc.contains(it) }) {
             var current: AccessibilityNodeInfo? = node
             while (current != null) {
-                if (current.isClickable) return AccessibilityNodeInfo.obtain(current)
+                if (current.isClickable) return current
                 current = current.parent
             }
         }

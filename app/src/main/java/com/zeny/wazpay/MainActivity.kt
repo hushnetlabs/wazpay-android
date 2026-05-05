@@ -36,8 +36,13 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.zeny.wazpay.logic.PreferenceManager
 import com.zeny.wazpay.ui.screens.*
 import com.zeny.wazpay.ui.theme.WazpayTheme
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 
 private const val TAG = "WazPay-Main"
+var isTestMode = false
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -221,7 +226,11 @@ fun MainContent(prefs: PreferenceManager) {
                         onScanClick = { screenState = "SCANNER" },
                         recentRecipients = recentRecipients,
                         onProfileClick = { screenState = "PROFILE" },
-                        onCheckBalanceClick = { screenState = "BALANCE_CHECK" }
+                        onCheckBalanceClick = { screenState = "BALANCE_CHECK" },
+                        onToggleTestMode = {
+                            isTestMode = !isTestMode
+                            android.widget.Toast.makeText(context, if (isTestMode) "Test Mode Enabled" else "Test Mode Disabled", android.widget.Toast.LENGTH_SHORT).show()
+                        }
                     )
                     "SCANNER" -> QrScannerScreen(
                         onScanned = { upiId ->
@@ -291,7 +300,7 @@ fun MainContent(prefs: PreferenceManager) {
                         LaunchedEffect(Unit) {
                             val deadline = System.currentTimeMillis() + 90_000L
                             while (System.currentTimeMillis() < deadline) {
-                                kotlinx.coroutines.delay(1_000)
+                                kotlinx.coroutines.delay(300)
                                 if (prefs.lastBalance != null) { screenState = "BALANCE_RESULT"; break }
                                 if (!prefs.balanceCheckInProgress) {
                                     val err = prefs.lastError
@@ -343,37 +352,26 @@ private fun openAccessibilityServiceSettings(context: Context, serviceClass: Cla
     context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
 }
 
-private fun initiateBalanceCheck(context: Context, simIndex: Int) {
-    val ussdCode = "*99*3#"
-    Log.d(TAG, "Dialing balance check USSD: $ussdCode on SIM $simIndex")
-    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-        Log.w(TAG, "CALL_PHONE permission missing during initiateBalanceCheck")
+private fun dialUssd(context: Context, ussdCode: String, simIndex: Int, tagMsg: String) {
+    if (isTestMode) {
+        val prefs = PreferenceManager(context)
+        android.widget.Toast.makeText(context, "TEST MODE: Faking USSD $tagMsg", android.widget.Toast.LENGTH_SHORT).show()
+        GlobalScope.launch(Dispatchers.Main) {
+            delay(3000)
+            if (tagMsg.contains("balance check")) {
+                prefs.lastBalance = "₹12,345.67"
+                prefs.balanceCheckInProgress = false
+            } else {
+                prefs.lastPaymentSuccess = true
+                prefs.lastRefId = "TEST" + System.currentTimeMillis().toString().takeLast(8)
+                prefs.transactionInProgress = false
+            }
+        }
         return
     }
-    val uri = Uri.parse("tel:${Uri.encode(ussdCode)}")
-    val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-    val extras = Bundle()
-    try {
-        val phoneAccounts = telecomManager.callCapablePhoneAccounts
-        if (phoneAccounts != null && simIndex < phoneAccounts.size) {
-            extras.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccounts[simIndex])
-        }
-    } catch (e: Exception) {
-        Log.e(TAG, "Error setting phone account handle for balance check", e)
-    }
-    telecomManager.placeCall(uri, extras)
-}
-
-private fun initiatePayment(context: Context, recipient: String, amount: String, simIndex: Int) {
-    val isPhone = recipient.all { it.isDigit() } && recipient.length >= 10
-    val ussdCode = if (isPhone) {
-        "*99*1*1*$recipient*$amount*1#"
-    } else {
-        "*99*1#"
-    }
-    Log.d(TAG, "Dialing USSD: $ussdCode on SIM $simIndex (isPhone=$isPhone)")
+    Log.d(TAG, "Dialing $tagMsg: $ussdCode on SIM $simIndex")
     if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-        Log.w(TAG, "CALL_PHONE permission missing during initiatePayment")
+        Log.w(TAG, "CALL_PHONE permission missing")
         return
     }
     val uri = Uri.parse("tel:${Uri.encode(ussdCode)}")
@@ -388,4 +386,14 @@ private fun initiatePayment(context: Context, recipient: String, amount: String,
         Log.e(TAG, "Error setting phone account handle", e)
     }
     telecomManager.placeCall(uri, extras)
+}
+
+private fun initiateBalanceCheck(context: Context, simIndex: Int) {
+    dialUssd(context, "*99*3#", simIndex, "balance check")
+}
+
+private fun initiatePayment(context: Context, recipient: String, amount: String, simIndex: Int) {
+    val isPhone = recipient.all { it.isDigit() } && recipient.length >= 10
+    val ussdCode = if (isPhone) "*99*1*1*$recipient*$amount*1#" else "*99*1#"
+    dialUssd(context, ussdCode, simIndex, "USSD Payment (isPhone=$isPhone)")
 }

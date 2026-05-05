@@ -1,6 +1,7 @@
 package com.zeny.wazpay.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -12,6 +13,8 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -29,46 +32,72 @@ fun RecipientScreen(
     onScanClick: () -> Unit,
     recentRecipients: List<String> = emptyList(),
     onProfileClick: () -> Unit = {},
-    onCheckBalanceClick: () -> Unit = {}
+    onCheckBalanceClick: () -> Unit = {},
+    onToggleTestMode: () -> Unit = {}
 ) {
-    Box(
+    var titleClicks by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    androidx.compose.runtime.LaunchedEffect(titleClicks) {
+        if (titleClicks > 0) {
+            kotlinx.coroutines.delay(2000)
+            titleClicks = 0
+        }
+    }
+
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .windowInsetsPadding(WindowInsets.safeDrawing)
-            .imePadding(),
-        contentAlignment = Alignment.Center
+            .imePadding()
     ) {
-        Column(
+        // Pinned Top Bar
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp)
-                .verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "WAZPAY",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 4.sp,
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-                )
-                IconButton(onClick = onProfileClick) {
-                    Icon(
-                        Icons.Default.AccountCircle,
-                        contentDescription = "Account",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(28.dp)
-                    )
+            Text(
+                "WAZPAY",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 4.sp,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                modifier = Modifier.clickable(
+                    interactionSource = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null
+                ) {
+                    titleClicks++
+                    if (titleClicks >= 7) {
+                        onToggleTestMode()
+                        titleClicks = 0
+                    }
                 }
+            )
+            IconButton(onClick = onProfileClick) {
+                Icon(
+                    Icons.Default.AccountCircle,
+                    contentDescription = "Account",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(28.dp)
+                )
             }
-            
-            Spacer(modifier = Modifier.height(60.dp))
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp)
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
             
             Text(
                 "Who are you\nsending to?", 
@@ -198,6 +227,7 @@ fun RecipientScreen(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Check Balance", style = MaterialTheme.typography.titleMedium)
             }
+        }
         }
     }
 }
