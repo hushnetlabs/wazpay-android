@@ -47,6 +47,19 @@ The refactored modular structure provides significant technical benefits:
 2.  **Pattern Matching:** The logic layer identifies specific prompts (Welcome, IFSC, Pin, Amount) by analyzing screen text patterns.
 3.  **Security:** All sensitive data like UPI PINs are handled within the app's secure private storage and only used during active automation sessions.
 
+## 📱 Download & Installation
+
+Pre-built APK binaries are available for every official release! You do not need to install Android Studio or build the project from source to test the app.
+
+1. Go to the [Releases](https://github.com/hushnetlabs/wazpay-android/releases) tab on GitHub.
+2. Download the latest `wazpay-release.apk` (or `wazpay-debug.apk` for internal testing).
+3. Transfer or open the `.apk` file on your Android device to install.
+
+*(Optional)* You can verify the integrity of your downloaded APK using the attached `checksums.sha256` file:
+```bash
+sha256sum -c checksums.sha256 
+```
+
 ## Getting Started
 
 1.  Clone the WazPay repository.
